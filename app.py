@@ -6,7 +6,7 @@ import pandas as pd
 import openai
 import streamlit.components.v1 as components
 
-# ──────────────────────────  ENV & PAGE  ──────────────────────────────────
+# ── environment ───────────────────────────────────────────────────────────
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -14,15 +14,15 @@ st.set_page_config(page_title="Brand Semantic Triple Generator", layout="wide")
 st.title("Brand Semantic Triple Generator")
 st.markdown("**Subject | Predicate | Object | Category**")
 
-# ──────────────────────────  SESSION DEFAULTS  ────────────────────────────
+# ── session defaults ──────────────────────────────────────────────────────
 st.session_state.setdefault("synonyms", {})
 st.session_state.setdefault("last_df", pd.DataFrame())
 
-# ──────────────────────────  USER INPUTS  ─────────────────────────────────
+# ── user inputs ───────────────────────────────────────────────────────────
 brand = st.text_input("Brand (used as Subject in every triple)")
 
 c1, c2, c3, c4 = st.columns(4)
-services = c1.text_area("Services")
+services = c1.text_area("Services / Products")           # updated label
 audience = c2.text_area("Audience")
 values   = c3.text_area("Value Propositions")
 diffs    = c4.text_area("Differentiators")
@@ -30,15 +30,15 @@ diffs    = c4.text_area("Differentiators")
 num_triples = st.slider("Number of triples to generate", 10, 200, 50, 10)
 include_category = st.checkbox("Include “category” column", value=True)
 
-# ──────────────────────────  HELPERS  ─────────────────────────────────────
+# ── helpers ───────────────────────────────────────────────────────────────
 def gpt_json(prompt: str):
-    response = openai.chat.completions.create(
+    resp = openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.4,
         response_format={"type": "json_object"},
     )
-    return json.loads(response.choices[0].message.content)
+    return json.loads(resp.choices[0].message.content)
 
 def normalize_triples(raw):
     if isinstance(raw, list):
@@ -60,37 +60,27 @@ def normalize_triples(raw):
         df = df.drop(columns="category")
     return df
 
-# NEW—robust parser with clear instruction
 def fetch_synonyms(text: str, label: str):
-    """Return synonym list regardless of JSON shape."""
     if not text.strip():
         return []
     prompt = (
         f"For the following {label} terms, suggest 5–10 closely related words "
-        f"or phrases. Return ONLY a JSON object with a single key named "
-        f"`synonyms` whose value is the array of strings.\n\n{text}"
+        f"or phrases. Return ONLY a JSON object with key `synonyms`.\n\n{text}"
     )
     raw = gpt_json(prompt)
-
-    # expected: {"synonyms":[...]}
     if isinstance(raw, dict) and isinstance(raw.get("synonyms"), list):
         return [w.strip() for w in raw["synonyms"] if isinstance(w, str)]
-
-    # fallback: find first list of strings in dict
     if isinstance(raw, dict):
         for v in raw.values():
             if isinstance(v, list) and all(isinstance(x, str) for x in v):
                 return [x.strip() for x in v]
-
-    # bare list case
     if isinstance(raw, list):
         return [w.strip() for w in raw if isinstance(w, str)]
-
     return []
 
-# color badges
 COLOR_MAP = {
-    "services": "#1f77b4",
+    "services / products": "#1f77b4",     # updated key
+    "services": "#1f77b4",                # keep old for GPT default
     "audience": "#2ca02c",
     "value-propositions": "#ff7f0e",
     "differentiators": "#9467bd",
@@ -106,16 +96,16 @@ def badge(df: pd.DataFrame):
         axis=0,
     )
 
-# ──────────────────────────  PREVIEW  ─────────────────────────────────────
+# ── preview one per category ──────────────────────────────────────────────
 if st.button("🔎 Preview – one per category"):
     if not brand:
         st.warning("Enter a brand first.")
     else:
         prompt = (
-            f'Subject is "{brand}". Generate ONE triple each for services, '
-            "audience, value-propositions, differentiators. "
+            f'Subject is "{brand}". Generate ONE triple each for '
+            "services / products, audience, value-propositions, differentiators. "
             "Return JSON array with subject, predicate, object, category.\n\n"
-            f"Services: {services}\nAudience: {audience}\n"
+            f"Services / products: {services}\nAudience: {audience}\n"
             f"Value propositions: {values}\nDifferentiators: {diffs}"
         )
         df_prev = normalize_triples(gpt_json(prompt))
@@ -123,16 +113,16 @@ if st.button("🔎 Preview – one per category"):
         st.subheader("Preview")
         st.write(badge(df_prev))
 
-# ──────────────────────────  GENERATE FULL SET  ───────────────────────────
+# ── generate full set ─────────────────────────────────────────────────────
 if st.button(f"⚙️ Generate {num_triples} triples"):
     if not brand:
         st.warning("Enter a brand first.")
     else:
         prompt = (
             f'Subject is "{brand}". Produce EXACTLY {num_triples} triples, '
-            "evenly across services, audience, value-propositions and "
+            "evenly across services / products, audience, value-propositions, "
             "differentiators. Return JSON array with subject, predicate, object, category.\n\n"
-            f"Services: {services}\nAudience: {audience}\n"
+            f"Services / products: {services}\nAudience: {audience}\n"
             f"Value propositions: {values}\nDifferentiators: {diffs}"
         )
         df = normalize_triples(gpt_json(prompt))
@@ -140,7 +130,7 @@ if st.button(f"⚙️ Generate {num_triples} triples"):
         st.success(f"{len(df)} triples ready.")
         st.write(badge(df))
 
-# ──────────────────────────  CLIPBOARD & CSV  ─────────────────────────────
+# ── clipboard + CSV download ──────────────────────────────────────────────
 if not st.session_state["last_df"].empty:
     csv_text = st.session_state["last_df"].to_csv(index=False)
     components.html(
@@ -158,10 +148,10 @@ if not st.session_state["last_df"].empty:
         mime="text/csv",
     )
 
-# ──────────────────────────  SYNONYMS  ─────────────────────────────────────
+# ── synonyms helper ───────────────────────────────────────────────────────
 if st.button("💡 Suggest similar words"):
     st.session_state["synonyms"] = {
-        "Services": fetch_synonyms(services, "service"),
+        "Services / Products": fetch_synonyms(services, "service or product"),
         "Audience": fetch_synonyms(audience, "audience"),
         "Value Propositions": fetch_synonyms(values, "value proposition"),
         "Differentiators": fetch_synonyms(diffs, "differentiator"),
@@ -175,7 +165,7 @@ if st.session_state["synonyms"]:
     st.subheader("🔄 Suggested Similar Words")
     st.table(syn_df)
 
-# ──────────────────────────  FOOTER  ──────────────────────────────────────
+# ── footer remains unchanged ──────────────────────────────────────────────
 st.markdown(
     """
 ---  
