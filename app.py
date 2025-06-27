@@ -6,7 +6,7 @@ import pandas as pd
 import openai
 import streamlit.components.v1 as components
 
-# ── environment ───────────────────────────────────────────────────────────
+# ──────────────────────────  ENV & PAGE  ──────────────────────────────────
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -14,11 +14,11 @@ st.set_page_config(page_title="Brand Semantic Triple Generator", layout="wide")
 st.title("Brand Semantic Triple Generator")
 st.markdown("**Subject | Predicate | Object | Category**")
 
-# ── session defaults ──────────────────────────────────────────────────────
+# ──────────────────────────  SESSION DEFAULTS  ────────────────────────────
 st.session_state.setdefault("synonyms", {})
 st.session_state.setdefault("last_df", pd.DataFrame())
 
-# ── user inputs ───────────────────────────────────────────────────────────
+# ──────────────────────────  USER INPUTS  ─────────────────────────────────
 brand = st.text_input("Brand (used as Subject in every triple)")
 
 c1, c2, c3, c4 = st.columns(4)
@@ -30,7 +30,7 @@ diffs    = c4.text_area("Differentiators")
 num_triples = st.slider("Number of triples to generate", 10, 200, 50, 10)
 include_category = st.checkbox("Include “category” column", value=True)
 
-# ── helpers ───────────────────────────────────────────────────────────────
+# ──────────────────────────  HELPERS  ─────────────────────────────────────
 def gpt_json(prompt: str):
     response = openai.chat.completions.create(
         model="gpt-4o-mini",
@@ -60,17 +60,35 @@ def normalize_triples(raw):
         df = df.drop(columns="category")
     return df
 
+# NEW—robust parser with clear instruction
 def fetch_synonyms(text: str, label: str):
+    """Return synonym list regardless of JSON shape."""
     if not text.strip():
         return []
     prompt = (
-        f"For the following {label} terms, suggest 5-10 related words.\n"
-        "Return ONLY a JSON array.\n\n" + text
+        f"For the following {label} terms, suggest 5–10 closely related words "
+        f"or phrases. Return ONLY a JSON object with a single key named "
+        f"`synonyms` whose value is the array of strings.\n\n{text}"
     )
-    data = gpt_json(prompt)
-    return data if isinstance(data, list) else data.get("synonyms", [])
+    raw = gpt_json(prompt)
 
-# colour badge styling
+    # expected: {"synonyms":[...]}
+    if isinstance(raw, dict) and isinstance(raw.get("synonyms"), list):
+        return [w.strip() for w in raw["synonyms"] if isinstance(w, str)]
+
+    # fallback: find first list of strings in dict
+    if isinstance(raw, dict):
+        for v in raw.values():
+            if isinstance(v, list) and all(isinstance(x, str) for x in v):
+                return [x.strip() for x in v]
+
+    # bare list case
+    if isinstance(raw, list):
+        return [w.strip() for w in raw if isinstance(w, str)]
+
+    return []
+
+# color badges
 COLOR_MAP = {
     "services": "#1f77b4",
     "audience": "#2ca02c",
@@ -81,15 +99,14 @@ COLOR_MAP = {
 def badge(df: pd.DataFrame):
     if "category" not in df:
         return df
-    def style(val):
-        color = COLOR_MAP.get(str(val).lower(), "#999")
-        return f"background-color:{color};color:white"
+    def style(v):
+        return f"background-color:{COLOR_MAP.get(str(v).lower(), '#999')};color:white"
     return df.style.apply(
         lambda col: [style(v) if col.name == "category" else "" for v in col],
         axis=0,
     )
 
-# ── preview one per category ──────────────────────────────────────────────
+# ──────────────────────────  PREVIEW  ─────────────────────────────────────
 if st.button("🔎 Preview – one per category"):
     if not brand:
         st.warning("Enter a brand first.")
@@ -106,14 +123,14 @@ if st.button("🔎 Preview – one per category"):
         st.subheader("Preview")
         st.write(badge(df_prev))
 
-# ── generate full set ─────────────────────────────────────────────────────
+# ──────────────────────────  GENERATE FULL SET  ───────────────────────────
 if st.button(f"⚙️ Generate {num_triples} triples"):
     if not brand:
         st.warning("Enter a brand first.")
     else:
         prompt = (
             f'Subject is "{brand}". Produce EXACTLY {num_triples} triples, '
-            "distributed evenly across services, audience, value-propositions, "
+            "evenly across services, audience, value-propositions and "
             "differentiators. Return JSON array with subject, predicate, object, category.\n\n"
             f"Services: {services}\nAudience: {audience}\n"
             f"Value propositions: {values}\nDifferentiators: {diffs}"
@@ -123,7 +140,7 @@ if st.button(f"⚙️ Generate {num_triples} triples"):
         st.success(f"{len(df)} triples ready.")
         st.write(badge(df))
 
-# ── clipboard + CSV download ──────────────────────────────────────────────
+# ──────────────────────────  CLIPBOARD & CSV  ─────────────────────────────
 if not st.session_state["last_df"].empty:
     csv_text = st.session_state["last_df"].to_csv(index=False)
     components.html(
@@ -141,7 +158,7 @@ if not st.session_state["last_df"].empty:
         mime="text/csv",
     )
 
-# ── synonyms helper ───────────────────────────────────────────────────────
+# ──────────────────────────  SYNONYMS  ─────────────────────────────────────
 if st.button("💡 Suggest similar words"):
     st.session_state["synonyms"] = {
         "Services": fetch_synonyms(services, "service"),
@@ -151,15 +168,14 @@ if st.button("💡 Suggest similar words"):
     }
 
 if st.session_state["synonyms"]:
-    st.subheader("🔄 Suggested Similar Words")
-    st.table(
-        pd.DataFrame(
-            st.session_state["synonyms"].items(),
-            columns=["category", "synonyms"],
-        )
+    syn_df = (
+        pd.DataFrame(st.session_state["synonyms"].items(), columns=["category", "synonyms"])
+        .assign(synonyms=lambda d: d.synonyms.apply(", ".join))
     )
+    st.subheader("🔄 Suggested Similar Words")
+    st.table(syn_df)
 
-# ── footer ────────────────────────────────────────────────────────────────
+# ──────────────────────────  FOOTER  ──────────────────────────────────────
 st.markdown(
     """
 ---  
