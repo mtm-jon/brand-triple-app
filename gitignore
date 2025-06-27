@@ -1,0 +1,16 @@
+# keep your OpenAI key and other secrets local
+.env
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+dist/
+build/
+*.log
+
+# virtual-env folders
+venv/
+.venv/
+env/
