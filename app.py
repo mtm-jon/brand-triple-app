@@ -22,7 +22,7 @@ st.session_state.setdefault("last_df", pd.DataFrame())
 brand = st.text_input("Brand (used as Subject in every triple)")
 
 c1, c2, c3, c4 = st.columns(4)
-services = c1.text_area("Services / Products")           # updated label
+services = c1.text_area("Services / Products")
 audience = c2.text_area("Audience")
 values   = c3.text_area("Value Propositions")
 diffs    = c4.text_area("Differentiators")
@@ -30,7 +30,7 @@ diffs    = c4.text_area("Differentiators")
 num_triples = st.slider("Number of triples to generate", 10, 200, 50, 10)
 include_category = st.checkbox("Include “category” column", value=True)
 
-# ── helpers ───────────────────────────────────────────────────────────────
+# ── OpenAI helper ─────────────────────────────────────────────────────────
 def gpt_json(prompt: str):
     resp = openai.chat.completions.create(
         model="gpt-4o-mini",
@@ -40,7 +40,16 @@ def gpt_json(prompt: str):
     )
     return json.loads(resp.choices[0].message.content)
 
+# ── triples parser ────────────────────────────────────────────────────────
 def normalize_triples(raw):
+    """
+    Accepts:
+      • list                        → [ {...}, {...} ]
+      • {"triples":[...]}           → preferred
+      • {"0":{…},"1":{…}}           → numbered keys
+      • any dict with a single list → {"data":[...]} fallback
+    Returns tidy DataFrame.
+    """
     if isinstance(raw, list):
         triples = raw
     elif isinstance(raw, dict):
@@ -49,9 +58,11 @@ def normalize_triples(raw):
         elif all(k.isdigit() for k in raw.keys()):
             triples = list(raw.values())
         else:
-            triples = [raw]
+            first_list = next((v for v in raw.values() if isinstance(v, list)), [])
+            triples = first_list
     else:
         triples = []
+
     df = pd.DataFrame(triples)
     for col in ("subject", "predicate", "object", "category"):
         if col not in df:
@@ -60,14 +71,16 @@ def normalize_triples(raw):
         df = df.drop(columns="category")
     return df
 
+# ── synonym fetcher ───────────────────────────────────────────────────────
 def fetch_synonyms(text: str, label: str):
     if not text.strip():
         return []
     prompt = (
-        f"For the following {label} terms, suggest 5–10 closely related words "
-        f"or phrases. Return ONLY a JSON object with key `synonyms`.\n\n{text}"
+        f"For the following {label} terms, suggest 5-10 related words or phrases. "
+        "Return ONLY a JSON object with key `synonyms`.\n\n" + text
     )
     raw = gpt_json(prompt)
+
     if isinstance(raw, dict) and isinstance(raw.get("synonyms"), list):
         return [w.strip() for w in raw["synonyms"] if isinstance(w, str)]
     if isinstance(raw, dict):
@@ -78,9 +91,10 @@ def fetch_synonyms(text: str, label: str):
         return [w.strip() for w in raw if isinstance(w, str)]
     return []
 
+# ── badge styling ─────────────────────────────────────────────────────────
 COLOR_MAP = {
-    "services / products": "#1f77b4",     # updated key
-    "services": "#1f77b4",                # keep old for GPT default
+    "services / products": "#1f77b4",
+    "services": "#1f77b4",
     "audience": "#2ca02c",
     "value-propositions": "#ff7f0e",
     "differentiators": "#9467bd",
@@ -102,8 +116,8 @@ if st.button("🔎 Preview – one per category"):
         st.warning("Enter a brand first.")
     else:
         prompt = (
-            f'Subject is "{brand}". Generate ONE triple each for '
-            "services / products, audience, value-propositions, differentiators. "
+            f'Subject is "{brand}". Generate ONE triple each for services / products, '
+            "audience, value-propositions, differentiators. "
             "Return JSON array with subject, predicate, object, category.\n\n"
             f"Services / products: {services}\nAudience: {audience}\n"
             f"Value propositions: {values}\nDifferentiators: {diffs}"
@@ -120,8 +134,8 @@ if st.button(f"⚙️ Generate {num_triples} triples"):
     else:
         prompt = (
             f'Subject is "{brand}". Produce EXACTLY {num_triples} triples, '
-            "evenly across services / products, audience, value-propositions, "
-            "differentiators. Return JSON array with subject, predicate, object, category.\n\n"
+            "evenly across services / products, audience, value-propositions, differentiators. "
+            "Return JSON array with subject, predicate, object, category.\n\n"
             f"Services / products: {services}\nAudience: {audience}\n"
             f"Value propositions: {values}\nDifferentiators: {diffs}"
         )
@@ -130,7 +144,7 @@ if st.button(f"⚙️ Generate {num_triples} triples"):
         st.success(f"{len(df)} triples ready.")
         st.write(badge(df))
 
-# ── clipboard + CSV download ──────────────────────────────────────────────
+# ── clipboard & CSV download ──────────────────────────────────────────────
 if not st.session_state["last_df"].empty:
     csv_text = st.session_state["last_df"].to_csv(index=False)
     components.html(
@@ -165,7 +179,7 @@ if st.session_state["synonyms"]:
     st.subheader("🔄 Suggested Similar Words")
     st.table(syn_df)
 
-# ── footer remains unchanged ──────────────────────────────────────────────
+# ── footer ────────────────────────────────────────────────────────────────
 st.markdown(
     """
 ---  
