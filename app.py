@@ -6,7 +6,7 @@ import pandas as pd
 import openai
 import streamlit.components.v1 as components
 
-# ── environment ───────────────────────────────────────────────────────────
+# ──────────────────────────  ENV & PAGE  ──────────────────────────────────
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -14,11 +14,11 @@ st.set_page_config(page_title="Brand Semantic Triple Generator", layout="wide")
 st.title("Brand Semantic Triple Generator")
 st.markdown("**Subject | Predicate | Object | Category**")
 
-# ── session defaults ──────────────────────────────────────────────────────
+# ──────────────────────────  SESSION DEFAULTS  ────────────────────────────
 st.session_state.setdefault("synonyms", {})
 st.session_state.setdefault("last_df", pd.DataFrame())
 
-# ── user inputs ───────────────────────────────────────────────────────────
+# ──────────────────────────  USER INPUTS  ─────────────────────────────────
 brand = st.text_input("Brand (used as Subject in every triple)")
 
 c1, c2, c3, c4 = st.columns(4)
@@ -30,8 +30,9 @@ diffs    = c4.text_area("Differentiators")
 num_triples = st.slider("Number of triples to generate", 10, 200, 50, 10)
 include_category = st.checkbox("Include “category” column", value=True)
 
-# ── OpenAI helper ─────────────────────────────────────────────────────────
+# ──────────────────────────  OpenAI Helper  ───────────────────────────────
 def gpt_json(prompt: str):
+    """Call GPT-4o in JSON-only mode."""
     resp = openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
@@ -40,26 +41,21 @@ def gpt_json(prompt: str):
     )
     return json.loads(resp.choices[0].message.content)
 
-# ── triples parser ────────────────────────────────────────────────────────
+# ──────────────────────────  PARSE TRIPLES  ───────────────────────────────
 def normalize_triples(raw):
     """
-    Accepts:
-      • list                        → [ {...}, {...} ]
-      • {"triples":[...]}           → preferred
-      • {"0":{…},"1":{…}}           → numbered keys
-      • any dict with a single list → {"data":[...]} fallback
-    Returns tidy DataFrame.
+    Accept list, 'triples' dict, numbered dict, or any dict with a single list.
+    Return DataFrame with ordered columns; drop category if user unchecked box.
     """
     if isinstance(raw, list):
         triples = raw
     elif isinstance(raw, dict):
         if isinstance(raw.get("triples"), list):
             triples = raw["triples"]
-        elif all(k.isdigit() for k in raw.keys()):
+        elif all(k.isdigit() for k in raw):
             triples = list(raw.values())
         else:
-            first_list = next((v for v in raw.values() if isinstance(v, list)), [])
-            triples = first_list
+            triples = next((v for v in raw.values() if isinstance(v, list)), [])
     else:
         triples = []
 
@@ -71,30 +67,49 @@ def normalize_triples(raw):
         df = df.drop(columns="category")
     return df
 
-# ── synonym fetcher ───────────────────────────────────────────────────────
+# ──────────────────────────  SYNONYM FETCHER  ─────────────────────────────
 def fetch_synonyms(text: str, label: str):
+    """Return synonym list; handles nested and numbered JSON structures."""
     if not text.strip():
         return []
+
     prompt = (
-        f"For the following {label} terms, suggest 5-10 related words or phrases. "
-        "Return ONLY a JSON object with key `synonyms`.\n\n" + text
+        f"For the following {label} terms, suggest 5–10 closely related words or phrases. "
+        "Return ONLY a JSON object whose single key is `synonyms`, mapped to an array of strings.\n\n"
+        + text
     )
     raw = gpt_json(prompt)
 
+    # 1. Expected shape
     if isinstance(raw, dict) and isinstance(raw.get("synonyms"), list):
         return [w.strip() for w in raw["synonyms"] if isinstance(w, str)]
+
+    # 2. {"synonyms":{"0":"term", ...}}
+    if isinstance(raw, dict) and isinstance(raw.get("synonyms"), dict):
+        inner = raw["synonyms"]
+        if all(k.isdigit() for k in inner):
+            return [v.strip() for v in inner.values() if isinstance(v, str)]
+
+    # 3. Top-level numbered dict
+    if isinstance(raw, dict) and all(k.isdigit() for k in raw):
+        return [v.strip() for v in raw.values() if isinstance(v, str)]
+
+    # 4. First list found anywhere in dict
     if isinstance(raw, dict):
         for v in raw.values():
             if isinstance(v, list) and all(isinstance(x, str) for x in v):
                 return [x.strip() for x in v]
-    if isinstance(raw, list):
-        return [w.strip() for w in raw if isinstance(w, str)]
+
+    # 5. Bare list
+    if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
+        return [x.strip() for x in raw]
+
     return []
 
-# ── badge styling ─────────────────────────────────────────────────────────
+# ──────────────────────────  BADGE STYLING  ───────────────────────────────
 COLOR_MAP = {
     "services / products": "#1f77b4",
-    "services": "#1f77b4",
+    "services": "#1f77b4",  # fallback
     "audience": "#2ca02c",
     "value-propositions": "#ff7f0e",
     "differentiators": "#9467bd",
@@ -104,13 +119,14 @@ def badge(df: pd.DataFrame):
     if "category" not in df:
         return df
     def style(v):
-        return f"background-color:{COLOR_MAP.get(str(v).lower(), '#999')};color:white"
+        color = COLOR_MAP.get(str(v).lower(), "#999")
+        return f"background-color:{color};color:white"
     return df.style.apply(
         lambda col: [style(v) if col.name == "category" else "" for v in col],
         axis=0,
     )
 
-# ── preview one per category ──────────────────────────────────────────────
+# ──────────────────────────  PREVIEW BUTTON  ──────────────────────────────
 if st.button("🔎 Preview – one per category"):
     if not brand:
         st.warning("Enter a brand first.")
@@ -127,7 +143,7 @@ if st.button("🔎 Preview – one per category"):
         st.subheader("Preview")
         st.write(badge(df_prev))
 
-# ── generate full set ─────────────────────────────────────────────────────
+# ──────────────────────────  GENERATE FULL SET  ───────────────────────────
 if st.button(f"⚙️ Generate {num_triples} triples"):
     if not brand:
         st.warning("Enter a brand first.")
@@ -144,7 +160,7 @@ if st.button(f"⚙️ Generate {num_triples} triples"):
         st.success(f"{len(df)} triples ready.")
         st.write(badge(df))
 
-# ── clipboard & CSV download ──────────────────────────────────────────────
+# ──────────────────────────  CLIPBOARD & CSV  ─────────────────────────────
 if not st.session_state["last_df"].empty:
     csv_text = st.session_state["last_df"].to_csv(index=False)
     components.html(
@@ -162,7 +178,7 @@ if not st.session_state["last_df"].empty:
         mime="text/csv",
     )
 
-# ── synonyms helper ───────────────────────────────────────────────────────
+# ──────────────────────────  SYNONYMS BUTTON  ─────────────────────────────
 if st.button("💡 Suggest similar words"):
     st.session_state["synonyms"] = {
         "Services / Products": fetch_synonyms(services, "service or product"),
@@ -179,7 +195,7 @@ if st.session_state["synonyms"]:
     st.subheader("🔄 Suggested Similar Words")
     st.table(syn_df)
 
-# ── footer ────────────────────────────────────────────────────────────────
+# ──────────────────────────  FOOTER  ──────────────────────────────────────
 st.markdown(
     """
 ---  
